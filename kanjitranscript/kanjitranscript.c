@@ -10,6 +10,7 @@ Licence AGPL http://www.gnu.org/licenses/agpl-3.0.de.html
 
 */
 #include <postgres.h>
+#include <varatt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -26,15 +27,6 @@ PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(osml10n_kanji_transcript);
 
-static int utf8_strlen(char *s) {
-  int i = 0, j = 0;
-  while (s[i]) {
-    if ((s[i] & 0xc0) != 0x80) j++;
-    i++;
-  }
-  return j;
-}
-
 Datum osml10n_kanji_transcript(PG_FUNCTION_ARGS) {
   char *inbuf;
   char *normalized;
@@ -50,17 +42,22 @@ Datum osml10n_kanji_transcript(PG_FUNCTION_ARGS) {
     PG_RETURN_NULL();
   }
    
-  text *t = PG_GETARG_TEXT_P(0);
+  text *t = PG_GETARG_TEXT_PP(0);
 
-  inbuf=(char *) malloc((VARSIZE(t) - VARHDRSZ +1)*sizeof(char));
-  memcpy(inbuf, (void *) VARDATA(t), VARSIZE(t) - VARHDRSZ);
-  inbuf[VARSIZE(t) - VARHDRSZ]='\0';
+  int32 data_len = VARSIZE_ANY_EXHDR(t);
+  inbuf = (char *) malloc(data_len + 1);
+  if (inbuf == NULL) {
+      ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+      PG_RETURN_NULL();
+  }
+  memcpy(inbuf, VARDATA_ANY(t), data_len);
+  inbuf[data_len] = '\0';
   
   // 1. Use Normalization Form KC to avoid Enclosed CJK Letters like
   // https://en.wikipedia.org/wiki/Enclosed_CJK_Letters_and_Months
   // which are unavailabe in EUC-JP encoding
   // Example: ㈱ PARENTHESIZED IDEOGRAPH STOCK
-  normalized=utf8proc_NFKC(inbuf);
+  normalized = (char *) utf8proc_NFKC((const utf8proc_uint8_t *) inbuf);
   if (NULL == normalized) {
     ereport(ERROR, (errmsg("error calling utf8proc_NFKC")));
     free(inbuf);
@@ -72,9 +69,20 @@ Datum osml10n_kanji_transcript(PG_FUNCTION_ARGS) {
   // This is likely not verry portable to anything else
   // than GNU/Linux :)
   // numchars is number of normalized unicode characters
-  numchars=mbstowcs(NULL,normalized,0);
-  normalized_wc=malloc((numchars+1)*sizeof(wchar_t));
-  mbstowcs(normalized_wc,normalized,numchars+1);
+  numchars = mbstowcs(NULL, normalized, 0);
+  if (numchars == (size_t)-1) {
+      ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+              errmsg("mbstowcs failed to convert the string")));
+      free(normalized);
+      PG_RETURN_NULL();
+  }
+  normalized_wc = malloc((numchars + 1) * sizeof(wchar_t));
+  if (normalized_wc == NULL) {
+      ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+      free(normalized);
+      PG_RETURN_NULL();
+  }
+  mbstowcs(normalized_wc, normalized, numchars + 1);
   free(normalized);
   
   // 3. convert encoding to euc-jp to make it usable for kakasi
@@ -83,48 +91,60 @@ Datum osml10n_kanji_transcript(PG_FUNCTION_ARGS) {
   
   // create transcoder from wchar to EUC-JP
   iconv_t wc2euc = iconv_open("EUC-JP", "WCHAR_T");
-  if(wc2euc == (iconv_t) -1) {
+  if (wc2euc == (iconv_t) -1) {
       ereport(ERROR, (errmsg("iconv Initialization failure")));
+      free(normalized_wc);
       PG_RETURN_NULL();
   }
    
-  // len of wchar
-  size_t ibl = numchars*sizeof(wchar_t);;
   // len of eucjp is maximum 3 bytes per char + 0-terminator
-  size_t obl =  numchars*3+1;
-  size_t clen_in = sizeof(wchar_t);
-  size_t clen_out = sizeof(wchar_t);
-         
+  size_t obl = numchars * 3 + 1;
+  
   char *converted = calloc(obl, sizeof(char));
+  if (converted == NULL) {
+      iconv_close(wc2euc);
+      free(normalized_wc);
+      ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+      PG_RETURN_NULL();
+  }
   char *converted_start = converted;
   char *single_euc = calloc(4, sizeof(char));
+  if (single_euc == NULL) {
+      iconv_close(wc2euc);
+      free(normalized_wc);
+      free(converted);
+      ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+      PG_RETURN_NULL();
+  }
   char *single_euc_start = single_euc;
   
-  // convert wchat to eucjp
+  // convert wchar to eucjp
   // do this character by character and ignore
   // characters where conversion failed  
   char *iconv_in;
   size_t euclen; 
-  for (i=0;i<wcslen(normalized_wc);i++) {
+  for (i = 0; i < wcslen(normalized_wc); i++) {
     iconv_in = (char *)&normalized_wc[i];
-    clen_in = clen_out = sizeof(wchar_t);
-    int ret = iconv(wc2euc,&iconv_in,&clen_in, &single_euc, &clen_out);
+    size_t clen_in = sizeof(wchar_t);
+    size_t clen_out = 4; // size of single_euc buffer
+
+    size_t ret = iconv(wc2euc, &iconv_in, &clen_in, &single_euc, &clen_out);
     // copy EUC-JP character to output if conversion succeeded
-    if(ret != (size_t) -1) {
-      euclen=sizeof(wchar_t)-clen_out;
-      memcpy(converted,single_euc_start,euclen);
-      converted+=euclen;
+    if (ret != (size_t) -1) {
+      euclen = 4 - clen_out;
+      memcpy(converted, single_euc_start, euclen);
+      converted += euclen;
     }
-    single_euc=single_euc_start;
+    single_euc = single_euc_start;
   }
   // 0-terminate EUC-JP string
-  converted='\0';
+  *converted = '\0';
   free(single_euc_start);  
   iconv_close(wc2euc);
   free(normalized_wc);
 
   // EUC-JP string is empty
-  if (strlen(converted_start)==0) {
+  if (strlen(converted_start) == 0) {
     free(converted_start);
     PG_RETURN_NULL();
   }
@@ -132,10 +152,10 @@ Datum osml10n_kanji_transcript(PG_FUNCTION_ARGS) {
   // 4. run kakasi transliteration
   
   // run kakasi on eucjp string
-  kakasi_getopt_argv(6,kakasi_argv);
-  kakasi_out=kakasi_do(converted_start);
+  kakasi_getopt_argv(6, kakasi_argv);
+  kakasi_out = kakasi_do(converted_start);
   free(converted_start);
-  if (kakasi_out==NULL) {
+  if (kakasi_out == NULL) {
     ereport(ERROR, (errmsg("kakasi_do failed")));
     PG_RETURN_NULL();
   }
@@ -146,7 +166,7 @@ Datum osml10n_kanji_transcript(PG_FUNCTION_ARGS) {
   text *new_text = (text *) palloc(VARHDRSZ + obufLen);
   SET_VARSIZE(new_text, VARHDRSZ + obufLen);
   memcpy((void *) VARDATA(new_text), /* destination */
-         (void *) kakasi_out,obufLen);
+         (void *) kakasi_out, obufLen);
   kakasi_free(kakasi_out);
   PG_RETURN_TEXT_P(new_text);
 }

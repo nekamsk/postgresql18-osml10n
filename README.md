@@ -1,7 +1,9 @@
 #  OSM map l10n functions
 ## (from German Mapnik style)
 
-## ![This Repository is deprecated in favor of https://github.com/giggls/osml10n/](https://github.com/giggls/osml10n/)
+This is a fork of mapnik-german-l10n, a PostgreSQL extension for localizing and transliterating OpenStreetMap names. This fork is adapted for RHEL-based systems and provides RPM packaging, PostgreSQL 18 compatibility fixes, and build integration for RHEL-based distributions.
+
+Due to download limitations with curl/wget for https://nominatim.org/data/country_grid.sql.gz, you must manually download the archive and place it in rpmbuild/SOURCES.
 
 All l10n functions from German Mapnik style are implemented as PL/pgSQL stored procedures
 and are therefore usable in a renderer independent way.

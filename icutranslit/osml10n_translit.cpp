@@ -20,6 +20,7 @@ Licence AGPL http://www.gnu.org/licenses/agpl-3.0.de.html
 extern "C" {
 
 #include <postgres.h>
+#include <varatt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <mb/pg_wchar.h>

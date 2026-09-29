@@ -16,11 +16,11 @@ for cmd in curl sed basename; do
   fi
 done
 
-# download country_osm_grid.sql from nominatim if not available
+# download country_osm_grid.sql from github if not available
 if ! [ -f "country_osm_grid.sql" ]; then
   rm -f country_osm_grid.sql
-  echo -n "Trying to download country_grid.sql.gz from nominatim.org... "
-  curl -sL https://www.nominatim.org/data/country_grid.sql.gz |gzip -d >country_osm_grid.sql
+  echo -n "Trying to download country_grid.sql from GitHub... "
+  curl -sL https://raw.githubusercontent.com/osm-search/country-grid-data/master/country_grid.sql -o country_osm_grid.sql
 
   if ! [ -s country_osm_grid.sql ]; then
     rm -f country_osm_grid.sql

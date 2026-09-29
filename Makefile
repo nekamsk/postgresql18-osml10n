@@ -1,8 +1,8 @@
 # 'Makefile'
 
 # Get extension version number from debian/changelog 
-EXTVERSION=$(shell head -n1 debian/changelog |cut -d \( -f 2 |cut -d \) -f 1)
-EXTVERSION_OLD=$(shell grep -e '^osml10n' debian/changelog |head -n 2 |tail -n 1 |cut -d \( -f 2 |cut -d \) -f 1)
+EXTVERSION=$(shell head -n1 changelog |cut -d \( -f 2 |cut -d \) -f 1)
+EXTVERSION_OLD=$(shell grep -e '^osml10n' changelog |head -n 2 |tail -n 1 |cut -d \( -f 2 |cut -d \) -f 1)
 
 EXTDIR=$(shell pg_config --sharedir)
 
