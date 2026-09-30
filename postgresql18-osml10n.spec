@@ -29,7 +29,7 @@ Version:        2.5.10
 Release:        1%{?dist}
 VCS:            https://github.com/nekamsk/postgresql18-osml10n.git
 
-Source0:        postgresql18-osml10n-master.tar.gz
+Source0:        postgresql18-osml10n.tar.gz
 Source1:        country_grid.sql.gz
 
 BuildRequires:  gcc
@@ -62,7 +62,7 @@ which provides Thai transcription through plpython3u and the TLTK Python
 package when TLTK is available.
 
 %prep
-%setup -q -n postgresql18-osml10n-master
+%setup -q -n postgresql18-osml10n
 
 gzip -dc %{SOURCE1} > country_osm_grid.sql
 
