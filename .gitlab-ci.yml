@@ -1,37 +1,125 @@
-# * build postgresql-*-osml10n_*_amd64.deb
-# * run tests for the osml10n and osml10n_thai_transcript
-image: debian:10
+# GitLab CI/CD for building RPM packages of postgresql18-osml10n
+# * build postgresql18-osml10n-*.rpm
+# * run tests for osml10n and osml10n_thai_transcript
+
+image: redos/redos:8.0.3
 
 variables:
   LANG: C.UTF-8
+  PG_VERSION: "18"
+  PKG_NAME: "postgresql18-osml10n"
+  SPEC_FILE: "postgresql18-osml10n.spec"
+  RPM_TOPDIR: "${CI_PROJECT_DIR}/rpmbuild"
 
+stages:
+  - build
+  - test
+
+# ---------------------------------------------------------------------------
+# Build stage
+# ---------------------------------------------------------------------------
 build:
   stage: build
-  # instead of calling g++ directly you can also use some build toolkit like make
-  # install the necessary build tools when needed
-  before_script:
-     - apt-get update
-     - apt-get -y install devscripts equivs
-     - mk-build-deps -t "apt-get -y" -i debian/control
-  script: 
-    - make deb
-    - mkdir build
-    - mv ../*.deb ../*.buildinfo ../*.changes build
-  artifacts:
-    paths:
-      - build/postgresql-*-osml10n_*.deb
   tags:
     - IAD
+  before_script:
+    # Enable CRB / CodeReady Linux Builder repository if required for
+    # pyproject-rpm-macros and other build helpers.
+    - dnf -y install dnf-plugins-core
+    - dnf -y config-manager --set-enabled crb || true
 
-# run tests using the binary built before
+    # Build toolchain and RPM utilities
+    - dnf -y install rpm-build rpmdevtools redhat-rpm-config make gcc gcc-c++
+
+    # PostgreSQL 18 development files
+    - dnf -y install postgresql18-devel postgresql18-server
+
+    # Runtime/build dependencies for the extension
+    - dnf -y install libicu-devel libkakasi-devel libutf8proc-devel
+    - dnf -y install lua-devel unac-devel
+
+    # Set up rpmbuild tree
+    - rpmdev-setuptree
+    - mkdir -p "${RPM_TOPDIR}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+    - ln -sfn "${RPM_TOPDIR}" "${HOME}/rpmbuild"
+
+  script:
+    # --- Prepare sources -------------------------------------------------
+    # The upstream tarball (from the fork repository) must be placed into
+    # rpmbuild/SOURCES. If it is stored elsewhere (e.g. as a GitLab
+    # artifact from a previous stage or fetched from the repo), copy it:
+    - cp -v "${SPEC_FILE}" "${RPM_TOPDIR}/SPECS/"
+    - cp -v postgresql18-osml10n-master.tar.gz "${RPM_TOPDIR}/SOURCES/"
+
+    # country_grid.sql.gz must be downloaded manually (curl/wget are
+    # blocked by nominatim.org). It must be pre-placed into the CI runner
+    # cache or fetched via a mirror. Fail fast if it is missing.
+    - |
+      if [ ! -f "${RPM_TOPDIR}/SOURCES/country_grid.sql.gz" ]; then
+        echo "ERROR: country_grid.sql.gz is missing from SOURCES."
+        echo "Due to download restrictions on nominatim.org, this file"
+        echo "must be provided manually (cache / artifact / mirror)."
+        exit 1
+      fi
+
+    # --- Build RPM -------------------------------------------------------
+    - rpmbuild -bb "${RPM_TOPDIR}/SPECS/${SPEC_FILE}"
+
+    # --- Collect artifacts ----------------------------------------------
+    - mkdir -p build
+    - cp -v "${RPM_TOPDIR}"/RPMS/x86_64/*.rpm build/
+
+  artifacts:
+    name: "${PKG_NAME}-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - build/*.rpm
+    expire_in: 1 week
+
+# ---------------------------------------------------------------------------
+# Test stage
+# ---------------------------------------------------------------------------
 test:
   stage: test
-  before_script:
-     - apt-get update
-     - apt-get -y install ./build/postgresql-*-osml10n_*_amd64.deb
-     - pip3 install tltk
-  script:
-    - ./tests/runtests_in_virtualenv.sh
   tags:
     - IAD
+  needs:
+    - build
+  before_script:
+    - dnf -y install dnf-plugins-core
+    - dnf -y config-manager --set-enabled crb || true
+    - dnf -y install postgresql18-server postgresql18-contrib
 
+    # Runtime dependencies of the extension
+    - dnf -y install libicu libkakasi libutf8proc lua unac
+
+    # Python virtualenv helper used by runtests_in_virtualenv.sh
+    - dnf -y install python3 python3-pip python3-virtualenv
+  script:
+    # --- Install the freshly built RPM ----------------------------------
+    - dnf -y install ./build/${PKG_NAME}-*.x86_64.rpm
+
+    # --- Initialise a throwaway PostgreSQL 18 cluster -------------------
+    - export PGDATA=$(mktemp -d)
+    - export PGBIN=/usr/pgsql-18/bin
+    - $PGBIN/initdb -D "$PGDATA" -U postgres --no-locale -E UTF8
+    - $PGBIN/pg_ctl -D "$PGDATA" -o "-p 55432 -k /tmp" -l "$PGDATA/log" start
+    - sleep 3
+
+    # --- Create the extension in a test database ------------------------
+    - $PGBIN/createdb -h /tmp -p 55432 -U postgres osml10n_test
+    - $PGBIN/psql -h /tmp -p 55432 -U postgres -d osml10n_test -c "CREATE EXTENSION osml10n;"
+    - $PGBIN/psql -h /tmp -p 55432 -U postgres -d osml10n_test -c "CREATE EXTENSION osml10n_thai_transcript;"
+
+    # --- Run the project's test suite -----------------------------------
+    - pip3 install tltk
+    - chmod +x tests/runtests_in_virtualenv.sh
+    - ./tests/runtests_in_virtualenv.sh
+
+  after_script:
+    # Stop the temporary PostgreSQL instance even if tests failed
+    - |
+      if [ -n "$PGDATA" ] && [ -x /usr/pgsql-18/bin/pg_ctl ]; then
+        /usr/pgsql-18/bin/pg_ctl -D "$PGDATA" stop -m fast || true
+      fi
+  tags:
+    - IAD
