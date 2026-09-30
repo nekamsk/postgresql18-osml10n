@@ -18,11 +18,11 @@ Currently the code consists of three parts:
    map rendering.
 
 See **INSTALL.md** file from sources for manual installation instructions.
-If you just installed the debian package all you have to do now ist to enable
+If you just installed the package all you have to do now ist to enable
 our extension in your PostgreSQL database as follows:
 
 ```sql
-CREATE EXTENSION osml10n;
+CREATE EXTENSION osml10n CASCADE;
 ```
 
 ### API
