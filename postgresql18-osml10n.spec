@@ -21,7 +21,6 @@
 
 Name:           postgresql18-osml10n
 Summary:        Localization functions for OpenStreetMap (osml10n)
-Summary(ru):    Функции локализации для OpenStreetMap (osml10n)
 URL:            https://github.com/nekamsk/postgresql18-osml10n
 License:        AGPL-3.0-or-later
 Epoch:          0
