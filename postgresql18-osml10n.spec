@@ -47,6 +47,8 @@ Requires:       postgresql18 >= 18.4
 Requires:       postgresql18-contrib
 Requires:       postgresql18-plpython3
 Requires:       postgis-pgsql-18
+Requires:       kakasi-libs
+Requires:       kakasi-dict
 
 %description
 OSM map localization functions originally developed for the German Mapnik
